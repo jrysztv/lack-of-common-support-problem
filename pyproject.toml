@@ -1,0 +1,21 @@
+[tool.poetry]
+name = "lack-of-common-support-problem"
+version = "0.1.0"
+description = ""
+authors = ["Istvan Peter Jaray <istvanpeterjaray@gmail.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+pandas = "^2.2.3"
+numpy = "^2.2.2"
+scikit-learn = "^1.6.1"
+jupyter = "^1.1.1"
+matplotlib = "^3.10.0"
+ace-tools = "^0.0"
+streamlit = "^1.41.1"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

@@ -59,7 +59,9 @@ def main():
         **Age Bins** / **Mileage Bins**:  
         - Enter a single integer (no commas) to specify the **number** of bins.  
         - Enter comma-separated values (e.g. `0, 60000, 250000`) to specify **cutoff points**.  
-        Make sure to include the endpoints if you do cutoffs!  
+        Make sure to include the endpoints if you do cutoffs!
+        - The current Mileage separates cars from trucks.
+        - There is only one bin for Age as default, but feel free to set it to 5 or 10!  
         """
     )
 

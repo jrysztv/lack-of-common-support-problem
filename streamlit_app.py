@@ -1,12 +1,11 @@
-# app.py
+# streamlit_app.py
 import streamlit as st
 import pandas as pd
 import numpy as np
 from typing import Union, List
 
-# Adjust the import path if your folder structure is different:
 from lack_of_common_support_problem.simulation import (
-    CarTruckRepairsSimulator,
+    NonOverlappingSupportSimulator,
     CarTruckSummary,
     CarTruckPlotter,
 )
@@ -31,42 +30,62 @@ def parse_bins(bin_str: str) -> Union[int, List[float]]:
         return int(bin_str)
 
 
+def parse_float_list(list_str: str) -> List[float]:
+    """
+    Parses a comma-separated string into a list of floats.
+    Example: "0, 50000, 100000" -> [0.0, 50000.0, 100000.0]
+    """
+    list_str = list_str.strip()
+    if not list_str:
+        return []
+    parts = [x.strip() for x in list_str.split(",")]
+    return [float(x) for x in parts if x]
+
+
 def main():
-    # Set page config for wide layout
     st.set_page_config(layout="wide")
 
-    # Title / Explanation
-    st.title("Car vs Truck Repairs Simulation")
+    st.title("Simulation with Non-Overlapping Mileage Support")
     st.markdown(
         """
-        This app simulates car and truck data, where **repairs** can be a treatment variable. 
-        A confounder (vehicle type) can create a situation where **naive OLS** vs. 
-        **coarsened matching** show very different estimates for the effect of repairs. 
+        This app simulates a scenario where we have a **binary treatment** 
+        (represented by `repaired_a_lot`), and the **mileage distributions** 
+        for treatment vs. control do **not overlap** (or overlap minimally).
 
-        In particular, the distributions of age and mileage for cars vs trucks are disjoint,
-        and trucks are **more likely** to have had a lot of repairs. 
-        This lack of common support can bias the naive OLS estimate if we omit the vehicle type. 
-        Coarsened matching helps mitigate the bias by matching within specified bins.
+        The price depends on:
+        1. A **polynomial** relationship with mileage,
+        2. A **linear** relationship with age,
+        3. A constant **treatment effect** (negative by default).
+            - We name this as repaired a lot for this example.
+        
+        We'll demonstrate how naive OLS (assuming mileage is linear) vs. coarsened matching
+        can yield different estimates of the treatment effect, especially when the 
+        mileage distribution is shifted and the functional form is misspecified.
         """
     )
 
     # ------------
-    # Sidebar parameters
+    # Sidebar: Binning Options
     # ------------
     st.sidebar.header("Binning Options")
     st.sidebar.markdown(
-        """
-        **Age Bins** / **Mileage Bins**:  
-        - Enter a single integer (no commas) to specify the **number** of bins.  
-        - Enter comma-separated values (e.g. `0, 60000, 250000`) to specify **cutoff points**.  
-        Make sure to include the endpoints if you do cutoffs!
-        - The current Mileage separates cars from trucks.
-        - There is only one bin for Age as default, but feel free to set it to 5 or 10!  
-        """
+        """Default simulation parameters generate a plateau between 50k and 120k miles.
+        Hence, the default mileage bins are set to cutoffs at these points."""
+    )
+    st.sidebar.markdown(
+        """The bins are used for both visualization and coarsened matching."""
     )
 
-    default_age_bins_str = "1"  # from the example usage
-    default_mileage_bins_str = "0, 60000, 250000"
+    st.sidebar.markdown(
+        """If you want to use a single bin, just input a single number. 
+        For multiple bins, input the cutoffs separated by commas."""
+    )
+
+    st.sidebar.markdown("""
+        **Note:** Compared to the original simulation, setting mileage bins to 10 will result in the best possible fit""")
+
+    default_age_bins_str = "1"
+    default_mileage_bins_str = "0, 50000, 120000, 250000"
 
     age_bins_str = st.sidebar.text_input("Age bins", default_age_bins_str)
     mileage_bins_str = st.sidebar.text_input("Mileage bins", default_mileage_bins_str)
@@ -82,11 +101,10 @@ def main():
         mileage_bins = parse_bins(mileage_bins_str)
     except ValueError:
         st.sidebar.error(
-            "Could not parse mileage_bins. Reverting to default [0, 60000, 250000]."
+            "Could not parse mileage_bins. Reverting to default [0, 80000, 300000]."
         )
-        mileage_bins = [0, 60000, 250000]
+        mileage_bins = [0, 50000, 120000, 250000]
 
-    # Collapsible containers for simulation parameters
     st.sidebar.markdown("---")
     st.sidebar.subheader("Simulation Parameter Options")
 
@@ -97,87 +115,87 @@ def main():
         seed = st.number_input(
             "seed (0 = None)", min_value=0, max_value=999999, value=42
         )
-        prob_truck = st.slider("prob_truck", min_value=0.0, max_value=1.0, value=0.4)
-        prob_repair_if_car = st.slider("prob_repair_if_car", 0.0, 1.0, 0.2)
-        prob_repair_if_truck = st.slider("prob_repair_if_truck", 0.0, 1.0, 0.8)
-
-    with st.sidebar.expander("Vehicle Age & Mileage Means/Stds", expanded=False):
-        age_mean_car = st.number_input("age_mean_car", value=5.0)
-        age_mean_truck = st.number_input("age_mean_truck", value=7.0)
-        mileage_mean_car = st.number_input("mileage_mean_car", value=30000.0)
-        mileage_mean_truck = st.number_input("mileage_mean_truck", value=160000.0)
-
-        age_std_car = st.number_input("age_std_car", value=2.0)
-        age_std_truck = st.number_input("age_std_truck", value=3.0)
-        mileage_std_car = st.number_input("mileage_std_car", value=8000.0)
-        mileage_std_truck = st.number_input("mileage_std_truck", value=30000.0)
-
-    with st.sidebar.expander("Coefficients & Premiums", expanded=False):
-        base_price_car = st.number_input("base_price_car", value=20000.0)
-        truck_premium = st.number_input("truck_premium", value=50000.0)
-        b_age = st.number_input("b_age", value=-500.0)
-        b_mileage = st.number_input("b_mileage", value=-0.1)
-        b_repairs = st.number_input("b_repairs", value=-3000.0)
+        prob_treatment = st.slider("prob_treatment", 0.0, 1.0, 0.5)
         noise_std = st.number_input("noise_std", value=2000.0)
 
-    # ------------
-    # "Run Simulation" button
-    # ------------
-    run_simulation = st.sidebar.button("Run Simulation")
+    with st.sidebar.expander("Age Distribution", expanded=False):
+        age_mean = st.number_input("age_mean", value=5.0)
+        age_std = st.number_input("age_std", value=2.0)
 
-    # We will store the simulation results (dataframe) in session_state, so that
-    # changes to the bins or plot_type can update the visualization without re-running
-    # the entire simulation each time (unless you explicitly click "Run Simulation").
-    if run_simulation:
-        # Create a simulator instance with the user inputs (defaults from example usage).
-        sim = CarTruckRepairsSimulator(
-            n_samples=int(n_samples),
-            seed=None if seed == 0 else int(seed),
-            prob_truck=prob_truck,
-            prob_repair_if_car=prob_repair_if_car,
-            prob_repair_if_truck=prob_repair_if_truck,
-            age_mean_car=age_mean_car,
-            age_mean_truck=age_mean_truck,
-            age_std_car=age_std_car,
-            age_std_truck=age_std_truck,
-            mileage_mean_car=mileage_mean_car,
-            mileage_mean_truck=mileage_mean_truck,
-            mileage_std_car=mileage_std_car,
-            mileage_std_truck=mileage_std_truck,
-            base_price_car=base_price_car,
-            truck_premium=truck_premium,
-            b_age=b_age,
-            b_mileage=b_mileage,
-            b_repairs=b_repairs,
-            noise_std=noise_std,
+    with st.sidebar.expander(
+        "Mileage Distribution (Treatment vs Control)", expanded=False
+    ):
+        mileage_mean_treated = st.number_input("mileage_mean_treated", value=105000.0)
+        mileage_mean_control = st.number_input("mileage_mean_control", value=65000.0)
+        mileage_std = st.number_input("mileage_std", value=40000.0)
+
+    with st.sidebar.expander("Effect Coefficients", expanded=False):
+        b_age = st.number_input("b_age (linear age effect)", value=-500.0)
+        b_treatment = st.number_input(
+            "b_treatment (constant treatment effect)", value=-3000.0
         )
 
-        # Generate data and store in session_state
-        st.session_state["data_df"] = sim.generate_data()
-        st.session_state["simulator"] = sim
+    with st.sidebar.expander("Mileage Polynomial Setup", expanded=False):
+        st.markdown(
+            "Define control points for the mileage->price polynomial. "
+            "These are (x_points, y_points), along with an optional polynomial degree. "
+            "If degree is None, we use `len(x_points)-1`."
+        )
+        default_x_points = "0, 50000, 85000, 120000, 200000, 250000"
+        default_y_points = "40000, 30000, 30000, 30000, 20000, 13000"
 
-    # ------------
-    # Main content (two columns)
-    # ------------
-    col_left, col_right = st.columns([3, 2])  # ratio 3:2
+        x_points_str = st.text_input("Mileage X points", default_x_points)
+        y_points_str = st.text_input(
+            "Mileage Y points (default plateaus between 50k and 120k)", default_y_points
+        )
+        mileage_poly_degree = st.number_input(
+            "Polynomial degree (0 = auto)", min_value=0, value=0
+        )
 
-    # We only proceed if there's data in session_state (after "Run Simulation")
+        # Parse into lists
+        x_points_list = parse_float_list(x_points_str)
+        y_points_list = parse_float_list(y_points_str)
+        # If degree=0 => we treat as None
+        actual_poly_degree = None if mileage_poly_degree == 0 else mileage_poly_degree
+
+    # "Run Simulation" button
+    run_simulation = st.sidebar.button("Run Simulation")
+
+    # Only run if button clicked
+    if run_simulation:
+        simulator = NonOverlappingSupportSimulator(
+            n_samples=int(n_samples),
+            seed=None if seed == 0 else int(seed),
+            prob_treatment=prob_treatment,
+            age_mean=age_mean,
+            age_std=age_std,
+            mileage_mean_treated=mileage_mean_treated,
+            mileage_mean_control=mileage_mean_control,
+            mileage_std=mileage_std,
+            b_age=b_age,
+            b_treatment=b_treatment,
+            noise_std=noise_std,
+            mileage_x_points=x_points_list if x_points_list else None,
+            mileage_y_points=y_points_list if y_points_list else None,
+            mileage_poly_degree=actual_poly_degree,
+        )
+        st.session_state["data_df"] = simulator.generate_data()
+        st.session_state["simulator"] = simulator
+
+    # Main layout
+    col_left, col_right = st.columns([3, 2])
+
     if "data_df" in st.session_state and "simulator" in st.session_state:
         data_df = st.session_state["data_df"]
         simulator = st.session_state["simulator"]
 
-        # Build the summary object with the chosen bins
+        # Prepare summary object
         summary = CarTruckSummary(
             simulator, age_bins=age_bins, mileage_bins=mileage_bins
         )
 
-        # ------------
-        # Left column: Plot controls & visualization
-        # ------------
         with col_left:
             st.subheader("Visualization Controls")
-
-            # The user wants a descriptive set of plot types
             plot_type_options = {
                 "Simple Scatter": "scatter",
                 "Binned (color by bin)": "binned",
@@ -185,82 +203,75 @@ def main():
                 "Binned + Treatment Highlight": "binned_treatment",
             }
             selected_plot_desc = st.selectbox(
-                "Select Plot Type:", list(plot_type_options.keys())
+                "Select Plot Type:", list(plot_type_options.keys()), index=2
             )
             plot_type = plot_type_options[selected_plot_desc]
 
-            # We create a plotter to figure out the bin indices
-            # (We need the integer bins for age_bin and mileage_bin if the user gave an int or custom list.)
-            # Let's create a temporary CarTruckPlotter to see what bins get assigned.
-            # Calculate max indices for sliders based on user-provided bins
-            max_age_bin = age_bins if isinstance(age_bins, int) else len(age_bins) - 1
-            max_mileage_bin = (
-                mileage_bins if isinstance(mileage_bins, int) else len(mileage_bins) - 1
-            )
-
+            # Figure out bin_id if we do "binned_treatment"
             bin_id = None
+            # Determine max index for bins
+            if isinstance(age_bins, int):
+                max_age_bin = age_bins
+            else:
+                max_age_bin = len(age_bins) - 1
+
+            if isinstance(mileage_bins, int):
+                max_mileage_bin = mileage_bins
+            else:
+                max_mileage_bin = len(mileage_bins) - 1
+
             if plot_type == "binned_treatment":
                 st.markdown("### Bin Selection")
-                # Handle Age Bin Slider
+                # Age bin slider
                 if max_age_bin > 1:
                     age_bin_slider = st.slider("Age bin index", 0, max_age_bin - 1, 0)
                 else:
-                    st.info("Age has only one bin. No selection needed.")
+                    st.info("Only one Age bin. No selection needed.")
                     age_bin_slider = 0
 
-                # Handle Mileage Bin Slider
+                # Mileage bin slider
                 if max_mileage_bin > 1:
                     mileage_bin_slider = st.slider(
                         "Mileage bin index", 0, max_mileage_bin - 1, 0
                     )
                 else:
-                    st.info("Mileage has only one bin. No selection needed.")
+                    st.info("Only one Mileage bin. No selection needed.")
                     mileage_bin_slider = 0
 
-                # Assign bin_id if both sliders exist
                 bin_id = (age_bin_slider, mileage_bin_slider)
-            # Generate the plots
-            plotter = CarTruckPlotter(
-                data_df,
-                age_bins=age_bins if isinstance(age_bins, int) else age_bins,
-                mileage_bins=mileage_bins
-                if isinstance(mileage_bins, int)
-                else mileage_bins,
-            )
+
+            # Do the plotting
+            plotter = CarTruckPlotter(data_df, age_bins, mileage_bins)
             plotter.plot_age_mileage_price(plot_type=plot_type, bin_id=bin_id)
             plotter.plot_age_vs_mileage(plot_type=plot_type, bin_id=bin_id)
 
             st.pyplot(plotter.age_mileage_price_plot)
             st.pyplot(plotter.age_mileage_plot)
 
-        # ------------
-        # Right column: Summary tables
-        # ------------
         with col_right:
             st.subheader("Results Summary")
-
-            # Compute OLS summary
             ols_df, cm_df = summary.display_summary()
 
-            # Styling function for bolding the 'repaired_a_lot' row
+            # Helper to highlight the 'repaired_a_lot' row in bold
             def highlight_repaired_a_lot(x):
-                # x.name is the row index
                 if x.name == "repaired_a_lot":
                     return ["font-weight: bold;"] * len(x)
                 return [""] * len(x)
 
-            # Display OLS summary with larger font
             st.markdown("**OLS Coefficients**")
             st.dataframe(ols_df.style.apply(highlight_repaired_a_lot, axis=1))
 
-            # Display Coarsened Matching summary with larger font
             st.markdown("**Coarsened Matching Estimate**")
             st.dataframe(cm_df.style.apply(highlight_repaired_a_lot, axis=1))
 
+            true_effect = (
+                simulator.b_treatment
+            )  # the constant treatment effect from the simulation
+            st.markdown(f"**True Treatment Effect:** {true_effect}")
+
     else:
-        # If user hasn't run simulation yet
         st.warning(
-            "Please configure parameters and click 'Run Simulation' in the sidebar."
+            "Please configure parameters and click 'Run Simulation' on the sidebar."
         )
 
 
